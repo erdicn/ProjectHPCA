@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <curand_kernel.h>
 
-#include "opti_pwlnn.cuh"
+#include "opti_pwlnn.cu"
 
 
 int main(void) {
