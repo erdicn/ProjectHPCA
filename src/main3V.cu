@@ -17,30 +17,28 @@ int main(void) {
 	dCPU[4] = 1; // d_4
 
 	int sizeWB = (dCPU[0] + 1) * dCPU[1] +
-				(dCPU[1] + 1) * dCPU[2] +
-				(dCPU[2] + 1) * dCPU[3] +
-				(dCPU[3] + 1) * dCPU[4];
+				 (dCPU[1] + 1) * dCPU[2] +
+				 (dCPU[2] + 1) * dCPU[3] +
+				 (dCPU[3] + 1) * dCPU[4];
 
 	int* MinMax;
 	cudaMallocManaged(&MinMax, 3*sizeof(int));
-	MinMax[0] = 5000000;
+	MinMax[0] =  5000000;
 	MinMax[1] = -5000000;
-	MinMax[2] = 0;
+	MinMax[2] =  0;
 
 	int nop = 16 * 16 * 16; // Number of subpolytopes
 
 	int deltaSize = (2 * dCPU[0] + dCPU[1] + dCPU[2] + dCPU[3] + dCPU[4]);
-	
-	int sizeB = (2 * dCPU[0] + dCPU[1] + dCPU[2] + dCPU[3] + dCPU[4]);
-
-	int sizeCB = (2 * dCPU[0] + dCPU[1] + dCPU[2] + dCPU[3] + dCPU[4]) * (1 + dCPU[0]);
+	int sizeB     = (2 * dCPU[0] + dCPU[1] + dCPU[2] + dCPU[3] + dCPU[4]);
+	int sizeCB    = (2 * dCPU[0] + dCPU[1] + dCPU[2] + dCPU[3] + dCPU[4]) * (1 + dCPU[0]);
 
 	for (int k = 1; k < 1 + dCPU[0]; k++) {
 		sizeCB += (deltaSize - k) * (1 + dCPU[0] - k);
-		sizeB += (deltaSize - k);
+		sizeB  += (deltaSize - k);
 	}
 
-	dCPU[MaxDepth] = sizeCB - deltaSize * (1 + dCPU[0]); // Values should be stored at the end Algo (4.4) deltaC
+	dCPU[MaxDepth]     = sizeCB - deltaSize * (1 + dCPU[0]); // Values should be stored at the end Algo (4.4) deltaC
 	dCPU[MaxDepth + 1] = sizeCB; // The total size needed for each configuration s DeltaC
 	dCPU[MaxDepth + 3] = sizeB - deltaSize; // Values should be stored at the end Algo (4.4) deltaB
 	dCPU[MaxDepth + 4] = sizeB; // The total size needed for each configuration s DeltaB
@@ -59,18 +57,18 @@ int main(void) {
 	Ccpu = (float*)malloc(sizeCB * nop * sizeof(float));
 
 	testCUDA(cudaMalloc(&LL, 2 * NbVertices * nop * sizeof(float))); // twice the size to be able to have a sorted list
-	LLcpu = (float*)malloc(NbVertices * nop * sizeof(float));
-	testCUDA(cudaMalloc(&Ver, NbVertices * nop * dCPU[0] * sizeof(float)));
-	Vercpu = (float*)malloc(NbVertices * nop * dCPU[0] * sizeof(float));
+	LLcpu = (float*)malloc(      NbVertices * nop * sizeof(float));
+	testCUDA(cudaMalloc(&Ver,    NbVertices * nop * dCPU[0] * sizeof(float)));
+	Vercpu = (float*)malloc(     NbVertices * nop * dCPU[0] * sizeof(float));
 
-	int siV = (4 + 3 + 2);
+	int siV  = (4 + 3 + 2);
 	int siVD = (3 + 2);
-	int siR = (9 + 4);
+	int siR  = (9 + 4);
 	int siRD = (4);
 
 	testCUDA(cudaMalloc(&R, siR * nop * sizeof(float)));
 	testCUDA(cudaMalloc(&num, 2 * nop * sizeof(int)));
-	numcpu = (int*)malloc(2 * nop * sizeof(float));
+	numcpu = (int*)malloc(    2 * nop * sizeof(float));
 
 	testCUDA(cudaMalloc(&q, nop * dCPU[0] * sizeof(float)));
 	
@@ -126,9 +124,9 @@ int main(void) {
 	cudaDeviceGetLimit(&currentLimit, cudaLimitStackSize);
 	printf("Current CUDA stack size: %zu bytes\n", currentLimit);
 
-	testCUDA(cudaMemset(LL, 0, 2 * NbVertices * nop * sizeof(float)));
-	testCUDA(cudaMemset(Ver, 0, NbVertices * nop * dCPU[0] * sizeof(float)));
-	testCUDA(cudaMemset(num, 0, 2 * nop * sizeof(float)));
+	testCUDA(cudaMemset(LL , 0, 2 * NbVertices * nop * sizeof(float)));
+	testCUDA(cudaMemset(Ver, 0,     NbVertices * nop * dCPU[0] * sizeof(float)));
+	testCUDA(cudaMemset(num, 0, 2 *              nop * sizeof(float)));
 
 	Part_k << <16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >> > (WBGPU,
 																		C, LL, 2 * dCPU[0], sizeWB,
@@ -136,10 +134,10 @@ int main(void) {
 																		siV, siVD, siR, siRD, MinMax);
 		
 	cudaDeviceSynchronize();
-	testCUDA(cudaMemcpy(Ccpu, C, nop * sizeCB * sizeof(float), cudaMemcpyDeviceToHost));
-	testCUDA(cudaMemcpy(LLcpu, LL, NbVertices * nop * sizeof(float), cudaMemcpyDeviceToHost));
+	testCUDA(cudaMemcpy(Ccpu  , C  , nop * sizeCB * sizeof(float)              , cudaMemcpyDeviceToHost));
+	testCUDA(cudaMemcpy(LLcpu , LL , NbVertices * nop * sizeof(float)          , cudaMemcpyDeviceToHost));
 	testCUDA(cudaMemcpy(Vercpu, Ver, NbVertices * nop * dCPU[0] * sizeof(float), cudaMemcpyDeviceToHost));
-	testCUDA(cudaMemcpy(numcpu, num, 2 * nop * sizeof(float), cudaMemcpyDeviceToHost));
+	testCUDA(cudaMemcpy(numcpu, num, 2 * nop * sizeof(float)                   , cudaMemcpyDeviceToHost));
 
 
 	printf("The estimated Minimum level %f\n", (float)0.0000001f * MinMax[0]);

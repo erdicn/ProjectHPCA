@@ -1,0 +1,1 @@
+nvcc --compiler-bindir=/usr/bin/g++-13 -arch=compute_86 -code=sm_86 -lm main2V.cu -o MC

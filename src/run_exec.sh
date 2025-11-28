@@ -1,0 +1,3 @@
+./MC
+
+# nsys nvprof ./myapp
