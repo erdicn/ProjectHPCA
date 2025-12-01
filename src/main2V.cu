@@ -9,13 +9,30 @@
 
 int main(void) {
 
+	// les couches
 	int dCPU[Sizedld];
-	dCPU[0] = 2; // d_0
-	dCPU[1] = 4; // d_1
+	dCPU[0] = 2; // d_0 input layer  
+	dCPU[1] = 4; // d_1 
 	dCPU[2] = 4; // d_2
 	dCPU[3] = 4; // d_3
-	dCPU[4] = 1; // d_4
+	dCPU[4] = 1; // d_4 output layer
 
+	// size of the weight and bias vectors
+	//
+	//	  1 biais    |
+	//				 |	1
+	//   1(1 poids)  |
+	//				 |	2
+	//   
+	//   				3
+	// 	 2(1 poids)
+	// 					4
+
+	//			3*4 + 5*4 + 5*4 + 5*1 = 57
+
+	// (nb_weights+nb_biases)[i] * (nb_neurones)[i+1]
+	// nb_connections_layers+bias = nn_i * nn_i+1 + nn_i+1
+	
 	int sizeWB = (dCPU[0] + 1) * dCPU[1] +
 				 (dCPU[1] + 1) * dCPU[2] +
 				 (dCPU[2] + 1) * dCPU[3] +
@@ -27,8 +44,9 @@ int main(void) {
 	MinMax[1] = -5000000;
 	MinMax[2] =  0;
 
-	int nop = 16 * 16 * 16; // Number of subpolytopes
+	int nop = 16 * 16 * 16; // Number of subpolytopes 4096 default
 
+	// TODO why the times two TODO didnt understand here 
 	int deltaSize = (2 * dCPU[0] + dCPU[1] + dCPU[2] + dCPU[3] + dCPU[4]);
 	int sizeB     = (2 * dCPU[0] + dCPU[1] + dCPU[2] + dCPU[3] + dCPU[4]);
 	int sizeCB    = (2 * dCPU[0] + dCPU[1] + dCPU[2] + dCPU[3] + dCPU[4]) * (1 + dCPU[0]);
@@ -49,22 +67,25 @@ int main(void) {
 	dCPU[MaxDepth + 2] = NbVertices; // The total size needed for each configuration s
 	
 	cudaMemcpyToSymbol(dld, dCPU, Sizedld * sizeof(int), 0, cudaMemcpyHostToDevice);
-
-	float* C, * Ccpu, * LL, * LLcpu, * Ver, * Vercpu, * R, *q;
+	
+	// C is C matrix and beta, levels: list of levels, Ver contains the list of vertices,
+	// R contains the isometry matrices, q contains the translation values
+	float* C, * Ccpu, * levels, * levelscpu, * Ver, * Vercpu, * R, *q;
 	int* num, * numcpu; // contains the true number of vertices and levels
 
 	testCUDA(cudaMalloc(&C, sizeCB * nop * sizeof(float)));
-	Ccpu = (float*)malloc(sizeCB * nop * sizeof(float));
+	Ccpu = (float*)malloc(  sizeCB * nop * sizeof(float));
 
-	testCUDA(cudaMalloc(&LL, 2 * NbVertices * nop * sizeof(float))); // twice the size to be able to have a sorted list
-	LLcpu = (float*)malloc(      NbVertices * nop * sizeof(float));
+	testCUDA(cudaMalloc(&levels, 2 * NbVertices * nop * sizeof(float))); // twice the size to be able to have a sorted list
+	levelscpu = (float*)malloc(      NbVertices * nop * sizeof(float));
 	testCUDA(cudaMalloc(&Ver,    NbVertices * nop * dCPU[0] * sizeof(float)));
 	Vercpu = (float*)malloc(     NbVertices * nop * dCPU[0] * sizeof(float));
 
-	int siV  = (3 + 2);
-	int siVD = (2);
-	int siR  = (4);
-	int siRD = 0;
+	// TODO how those these work
+	int siV  = (3 + 2); // binding index for volume V
+	int siVD = (2);     // binding index for volume V TODO what are the differnces between them
+	int siR  = (4);     // binding index for volume R
+	int siRD = 0;       // binding index for volume R
 
 	testCUDA(cudaMalloc(&R, siR * nop * sizeof(float)));
 	testCUDA(cudaMalloc(&num, 2 * nop * sizeof(int)));
@@ -72,7 +93,7 @@ int main(void) {
 
 	testCUDA(cudaMalloc(&q, nop * dCPU[0] * sizeof(float)));
 	
-	float* WBGPU;
+	float* WBGPU; // Coefficents of matrices and bias vectors
 
 	testCUDA(cudaMalloc(&WBGPU, sizeWB * sizeof(float)));
 
@@ -103,13 +124,13 @@ int main(void) {
 
 	testCUDA(cudaMemcpy(WBGPU, WB_data.data(), sizeWB * sizeof(float), cudaMemcpyHostToDevice));
 
-	int low = 0;
-	int up = nop;
-	int nbN = 16; // Number of neurones;
+	int low = 0;  // the starting index
+	int up = nop; // the ending index
+	int nbN = 16; // Number of neurones TODO  we should have 15 no ? in the 3d we should have 16
 	
 	testCUDA(cudaMemset(C, 0, nop * sizeCB * sizeof(float)));
 
-	float Tim;
+	float timer;
 	cudaEvent_t start, stop;			// GPU timer instructions
 	cudaEventCreate(&start);			// GPU timer instructions
 	cudaEventCreate(&stop);				// GPU timer instructions
@@ -124,18 +145,19 @@ int main(void) {
 	cudaDeviceGetLimit(&currentLimit, cudaLimitStackSize);
 	printf("Current CUDA stack size: %zu bytes\n", currentLimit);
 
-	testCUDA(cudaMemset(LL , 0, 2 * NbVertices * nop * sizeof(float)));
+	testCUDA(cudaMemset(levels , 0, 2 * NbVertices * nop * sizeof(float)));
 	testCUDA(cudaMemset(Ver, 0, 	NbVertices * nop * dCPU[0] * sizeof(float)));
 	testCUDA(cudaMemset(num, 0, 2 * 			 nop * sizeof(float)));
 
-	Part_k << <16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >> > (WBGPU,
-																							C, LL, 2 * dCPU[0], sizeWB,
-																							low, up, R, q, Ver, num, nbN, 4,
-																							siV, siVD, siR, siRD, MinMax);
+	//        TODO     TODO      why + 1         
+	Part_k <<<16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >>>
+			(WBGPU, C, levels, 2 * dCPU[0], sizeWB, 
+				low, up, R, q, Ver, num, nbN, 4, 
+				siV, siVD, siR, siRD, MinMax);
 		
 	cudaDeviceSynchronize();
 	testCUDA(cudaMemcpy(Ccpu  , C  , nop * sizeCB * sizeof(float)              , cudaMemcpyDeviceToHost));
-	testCUDA(cudaMemcpy(LLcpu , LL , NbVertices * nop * sizeof(float)          , cudaMemcpyDeviceToHost));
+	testCUDA(cudaMemcpy(levelscpu , levels , NbVertices * nop * sizeof(float)          , cudaMemcpyDeviceToHost));
 	testCUDA(cudaMemcpy(Vercpu, Ver, NbVertices * nop * dCPU[0] * sizeof(float), cudaMemcpyDeviceToHost));
 	testCUDA(cudaMemcpy(numcpu, num, 2 * nop * sizeof(float)                   , cudaMemcpyDeviceToHost));
 
@@ -156,18 +178,18 @@ int main(void) {
 
 	cudaEventRecord(stop, 0);			// GPU timer instructions
 	cudaEventSynchronize(stop);			// GPU timer instructions
-	cudaEventElapsedTime(&Tim,			// GPU timer instructions
+	cudaEventElapsedTime(&timer,			// GPU timer instructions
 		start, stop);					// GPU timer instructions
 	cudaEventDestroy(start);			// GPU timer instructions
 	cudaEventDestroy(stop);				// GPU timer instructions
 
-	printf("Execution time %f ms\n", Tim);
+	printf("Execution time %f ms\n", timer);
 
 	testCUDA(cudaFree(MinMax));
 	testCUDA(cudaFree(C));
 	free(Ccpu);
-	testCUDA(cudaFree(LL));
-	free(LLcpu);
+	testCUDA(cudaFree(levels));
+	free(levelscpu);
 	testCUDA(cudaFree(Ver));
 	free(Vercpu);
 	testCUDA(cudaFree(R));
