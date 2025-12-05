@@ -26,12 +26,13 @@ void printArray(int* a, int len){
 	}
 }
 
+#define INPUT_LAYER_DIM 2
 
 
 int main(void){
     // TOOD from file 
     int domains_CPU[NB_LAYERS];
-    domains_CPU[0] = 2; // input layer
+    domains_CPU[0] = INPUT_LAYER_DIM; // input layer
     for(int i = 1; i < NB_LAYERS-1; i++)
         domains_CPU[i] = 4; // hidden layers 
     domains_CPU[NB_LAYERS-1] = 1; // output layer
@@ -103,10 +104,12 @@ int main(void){
 	Vercpu = (float*)malloc(         nb_vertices * nb_subpolytopes * domains_CPU[0] * sizeof(float));
 
     // TODO how those these work
-	int siV  = (3 + 2); // binding index for volume V
-	int siVD = (2);     // binding index for volume V TODO what are the differnces between them
-	int siR  = (4);     // binding index for volume R
-	int siRD = 0;       // binding index for volume R
+	int siV  = (domains_CPU[0] == 2) ? (3 + 2) : (4 + 3 + 2); // binding index for volume V
+	int siVD = (domains_CPU[0] == 2) ? (  2  ) : (3 + 2);     // binding index for volume V TODO what are the differnces between them
+	int siR  = (domains_CPU[0] == 2) ? (  4  ) : (9 + 4);     // binding index for volume R
+	int siRD = (domains_CPU[0] == 2) ?    0    : (  4  );     // binding index for volume R
+
+	if(domains_CPU[0] > 3) std::cout << "The code is not made for dimension > 3\n";
 
 	// TODO instead of doing 4 layers do 3 then add it 
 	testCUDA(cudaMalloc(&R, siR * nb_subpolytopes * sizeof(float)));
@@ -174,12 +177,40 @@ int main(void){
 	//        TODO     TODO      why + 1         
 	// Part_k <<<16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >>>
 	// levL_k <<<16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >>>
-	Part_k <<<16 * 8, 16 * 2 * (domains_CPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * domains_CPU[0])) * sizeof(float) >>>
+	int min_nb_vertices_by_polytope = domains_CPU[0] + 1; // d0 + 1 = minimum number of vertices for a d0 dimension polytope
+	partialPart_k <<<16 * 8, 16 * 2 * min_nb_vertices_by_polytope, (sizeWB + 16 * 2 * max(nbN * 4, 15 * domains_CPU[0])) * sizeof(float) >>>
 			(WBGPU, C, levels, 2 * domains_CPU[0], sizeWB, 
 				low, up, R, q, Ver, num, nbN, 4, 
 				siV, siVD, siR, siRD, min_max, magic_values);
-		
+
+	testCUDA(cudaDeviceSynchronize()); // TODO not sure if i need this sync
+	
+	// TODO maybe there is a better way to calculate and create a new array
+	testCUDA(cudaMemcpy(numcpu, num, nb_subpolytopes * sizeof(Num_t), cudaMemcpyDeviceToHost));
+	int* non_empty_num_indices, *non_empty_num_indicesCPU, counter_non_empty_num = 0;
+	non_empty_num_indicesCPU = (int*) malloc(nb_subpolytopes * sizeof(int));
+	
+	// Non empty num calculation
+	for(int i = 0; i < nb_subpolytopes; i++){
+		if (numcpu[i].ver != 0){
+			non_empty_num_indicesCPU[counter_non_empty_num++] = i;
+			// std::cout << i << std::endl;
+		}
+	}
+
+	testCUDA(cudaMalloc(&non_empty_num_indices, counter_non_empty_num * sizeof(int)));
+	testCUDA(cudaMemcpy(non_empty_num_indices, non_empty_num_indicesCPU, 
+											counter_non_empty_num * sizeof(int), cudaMemcpyHostToDevice));
+
+
+	
+	levL_k <<<counter_non_empty_num, 16 * 2 * min_nb_vertices_by_polytope, (sizeWB + 16 * 2 * max(nbN * 4, 15 * domains_CPU[0])) * sizeof(float) >>>
+			(WBGPU, C, levels, 2 * domains_CPU[0], sizeWB, 
+				low, up, R, q, Ver, num, nbN, 4, 
+				siV, siVD, siR, siRD, min_max, magic_values, non_empty_num_indices);
+	
 	testCUDA(cudaDeviceSynchronize());
+	
 	testCUDA(cudaMemcpy(Ccpu  , C  , nb_subpolytopes * sizeCB * sizeof(float)              , cudaMemcpyDeviceToHost));
 	testCUDA(cudaMemcpy(levelscpu , levels , nb_vertices * nb_subpolytopes * sizeof(float)          , cudaMemcpyDeviceToHost));
 	testCUDA(cudaMemcpy(Vercpu, Ver, nb_vertices * nb_subpolytopes * domains_CPU[0] * sizeof(float), cudaMemcpyDeviceToHost));
@@ -222,6 +253,7 @@ int main(void){
 	free(numcpu);
 	testCUDA(cudaFree(WBGPU));
 	testCUDA(cudaFree(magic_values));
-
+	free(non_empty_num_indicesCPU);
+	
 	return 0;
 }

@@ -514,6 +514,7 @@ Algorithm 4.2 in "Global Maximization of piecewise linear Feedforward Neural Net
 // num contains the number of vertices
 // gbx the polytope index, in case we want to debug
 // i and tr indices of the recursion in dimension 3, in case we want to debug
+// Gets the vertices list corresponding to each polytope 
 __device__ void Vertices(float* Ver, float* C, float* R, float* q, int r, int rnm1,
 	float* WB, int tidx, float eps, int* flag, Num_t* num, int gbx, int i, int *tr, int* magic_values) {
 
@@ -729,16 +730,11 @@ __global__ void Part_k(float* coefs_WlBl, float* C, float* levels,
 	int Qt = threadIdx.x / dMax;
 	int tidx = threadIdx.x - Qt * dMax;
 	//int gbx = low + Qt + blockIdx.x * (blockDim.x / dMax);
-	int gbx = Qt + blockIdx.x * (blockDim.x / dMax);
+	int gbx = Qt + blockIdx.x * (blockDim.x / dMax); // polytope index
 	int deltaC, DeltaC, nbVer, val, lim, dl, dlm1;
 	deltaC = magic_values[0]; // Values should be stored at the end Algo (4.4)
 	DeltaC = magic_values[1]; // The total size needed for each configuration s
 	nbVer  = magic_values[2]; // The maximum number of vertices in each sub-polytope
-	
-	// if(0 == gbx){
-	// 	printf("%d\n", nbVer);
-	// 	printf("Potato\n");
-	// }
 
 	// Translate with L != 0 as long as Part_k has to be executed many times
 	if (low + gbx < up) {
@@ -843,6 +839,162 @@ __global__ void Part_k(float* coefs_WlBl, float* C, float* levels,
 
 }
 
+/****************************************************************************************************
+Partitioning algorithm as in  "Polynomial Distribution of Feedforward Neural Network Output"
+****************************************************************************************************/
+// coefs_WlBl contains coefficients of matrices and bias vectors
+// C contains both the C matrix and beta
+// Contains the values of levels
+// levels list of levels
+// m0 number of rows for the definition of the input compact D_0
+// nn_data_size of data needed (coefficients of matrices and bias vectors) to define the NN
+// low the starting index, here = 0 by default
+// up the ending index, here = 4096 by default 
+// V contains the list of volume coefficients 
+// R contains the isometry matrices
+// q contains the translation values
+// Ver contains the list of vertices
+// num contains the number of vertices as well as the number of 
+// nbN number of neurones
+// L number of layers
+// siV binding index for volume V
+// siVD binding index for volume V
+// siR binding index for volume R
+// siRD binding index for volume R
+// MinMax[0] and MinMax[1] are respectively the minimal and the maximal values of levels   
+__global__ void partialPart_k(float* coefs_WlBl, float* C, float* levels,
+						int m0, int nn_data_size, int low, int up, float* R, 
+						float* q, float* Ver, Num_t *num, int nbN, int L, 
+						int siV, int siVD, int siR, int siRD, MinMax_t *MinMax, int* magic_values) {
+	
+	int i, j, l, dMax;
+	float loc;
+	// The maximum number of involved threads per configuration (s_1,...,s_{L-1})
+	dMax = dld[0] + 1;			 // number of needed threads = d_0 + 1
+
+	extern __shared__ float WB[];
+	float *sl, *Wl;
+	sl = WB + nn_data_size;
+	Wl = sl + nbN*(blockDim.x / dMax);
+	// nbN is the total number of neurons and thus the number of ones and -ones
+
+	for (i = threadIdx.x; i < nn_data_size; i += blockDim.x) {
+		WB[i] = coefs_WlBl[i];
+	}
+
+	int Qt = threadIdx.x / dMax;
+	int tidx = threadIdx.x - Qt * dMax;
+	//int gbx = low + Qt + blockIdx.x * (blockDim.x / dMax);
+	int gbx = Qt + blockIdx.x * (blockDim.x / dMax); // polytope index
+	int deltaC, DeltaC, nbVer, val, lim, dl, dlm1;
+	deltaC = magic_values[0]; // Values should be stored at the end Algo (4.4)
+	DeltaC = magic_values[1]; // The total size needed for each configuration s
+	nbVer  = magic_values[2]; // The maximum number of vertices in each sub-polytope
+
+	// Translate with L != 0 as long as Part_k has to be executed many times
+	if (low + gbx < up) {
+		for (i = tidx; i < nbN; i += dMax) {
+			val = 2 * ((low + gbx >> i) % 2) - 1;
+			sl[i + Qt * nbN] = 1.0f*(val>=0) - 0.01f*(val<0);
+		}
+	}
+	
+	// Computes C_D and Beta_D
+	// Initialization that depends on the definition of the compact set D
+	// As this is the same to all sub-polytops, it has to be computed once, condition (low == 0)
+	if (low == 0) {
+		int index;
+		for (i = 0; i < m0; i++) {
+			index = i / 2;
+			C[gbx * DeltaC + deltaC + tidx + i * dMax] = 1.0f * (i == 2 * tidx) * (tidx < (dMax - 1)) -
+														 1.0f * (i == (2 * tidx + 1)) * (tidx < (dMax - 1)) +
+														(2 * index == i) * (tidx == (dMax - 1));
+		}
+	}
+	__syncthreads();
+
+	// This part is related to the computation of C_{1}
+	lim = m0;
+	dl = dld[1];
+	for (i = lim; i < lim + dl; i++) { // C starts at the right place at + m0*dMax
+		val = (sl[i-lim + Qt * nbN]>=0) - (sl[i - lim + Qt * nbN] < 0);
+		C[gbx * DeltaC + deltaC + tidx + i * dMax] = -(tidx < (dMax - 1)) * val * WB[tidx + (i - lim) * dMax] +
+														(tidx == (dMax - 1)) * val * WB[tidx + (i - lim) * dMax];
+	}
+	
+	lim = 0;
+	int dlmDelta = 0;
+	// This part is related to the computation of C_{l}
+	for (l = 2; l < L + 1; l++) {
+		lim += dld[l - 1] * (dld[l - 2] + 1);
+		dl = dld[l];
+		dlm1 = dld[l - 1];
+		dlmDelta += dlm1;
+		for(j=0; j<dl; j++){
+			if (l < L) {
+				val = (sl[j + Qt * nbN + dlmDelta] >= 0) - (sl[j + Qt * nbN + dlmDelta] < 0);
+			}
+			else { val = -1; }
+			// Starting with diag(s_{l})*W_{l}*diag(a(s_{l-1})) row by row
+			for (i = tidx; i < dlm1; i += dMax) {
+				Wl[i + Qt * dlm1] = val * WB[lim + j * (dlm1 + 1) + i] * sl[i + dlmDelta - dlm1 + Qt * nbN];
+			}
+			__syncthreads();
+			
+			loc = 0.0f;
+			for (i = 0; i < dlm1; i++) {
+				loc += Wl[i + Qt * dlm1] * C[gbx * DeltaC + deltaC + tidx + (i + m0 + dlmDelta - dlm1) * dMax];
+			}
+			C[gbx * DeltaC + deltaC + tidx + (j + m0 + dlmDelta) * dMax] = loc + (tidx == (dMax - 1)) * val * WB[lim + j * (dlm1 + 1) + dlm1];
+			__syncthreads();
+		}
+	}
+
+	int flag = 1; // if 1 computations performed, when flag switches to 0 the threads are only involved in synchronization 
+
+	int r = dMax - 1; // r = d0
+
+	float eps = 0.0f; // replaces the true zero : targetted precision
+
+	int rnm1 = m0 + dlmDelta + dl;	 // This is what is called  nrow(C[r-1]) - 1 for r = d0 in Algo 4.4 or m in Algo 4.1
+
+	__syncthreads();
+
+	int tr = 100;
+
+	Vertices(Ver, C + gbx * DeltaC + deltaC, R + gbx * siR + siRD,
+		q + gbx * r, r, rnm1 - 1, WB + Qt * 4 * nbN, tidx, eps, &flag,
+		&num[gbx], gbx + low, 0, &tr, magic_values);
+
+	//                                   (m0 + 12) = nb_of rows of beta, dMax dimension of max since we need to get to the last C   
+	// 				r = dMax - 1
+	// levL(Ver, C + gbx * DeltaC + deltaC + (m0 + 12) * dMax, levels + gbx * 2 * nbVer,
+	// 	&num[gbx], WB + Qt * 4 * nbN, tidx, 0, dMax - 1, gbx, magic_values);
+
+	// // if(num[gbx].ver != 0)
+	// // 	printf("%d %d %d\n", gbx,  num[gbx].lvl, num[gbx].ver);
+
+
+	// int pkint; // TODO what is this
+
+	// __syncthreads();
+
+	// for (l = 0; l < nbVer; l++) {
+	// 	flag = (l < num[gbx].lvl);
+	// 	if ((tidx == 0) && flag) {
+	// 		pkint = (int)10000000*levels[gbx * 2 * nbVer + l];
+	// 		atomicMin(&MinMax->min, pkint);
+	// 		atomicMax(&MinMax->max, pkint);
+	// 	}
+	// }
+
+	// if ((tidx == 0)) {
+	// 	atomicMax(&MinMax->final_max, num[gbx].ver);
+	// }
+
+}
+
+
 
 
 // coefs_WlBl contains coefficients of matrices and bias vectors
@@ -867,8 +1019,51 @@ __global__ void Part_k(float* coefs_WlBl, float* C, float* levels,
 // MinMax[0] and MinMax[1] are respectively the minimal and the maximal values of levels   
 __global__ void levL_k(float* coefs_WlBl, float* C, float* levels,
 						int m0, int nn_data_size, int low, int up, float* R, 
-						float* q, float* Ver, int *num, int nbN, int L, 
-						int siV, int siVD, int siR, int siRD, int *MinMax) {
+						float* q, float* Ver, Num_t *num, int nbN, int L, 
+						int siV, int siVD, int siR, int siRD, MinMax_t *MinMax, int* magic_values,
+						int* non_empty_num_indices) {
+	int i, l, dMax;
+	// The maximum number of involved threads per configuration (s_1,...,s_{L-1})
+	dMax = dld[0] + 1;			 // number of needed threads = d_0 + 1
+
+	extern __shared__ float WB[];
+
+	for (i = threadIdx.x; i < nn_data_size; i += blockDim.x) {
+		WB[i] = coefs_WlBl[i];
+	}
+
+	int Qt = threadIdx.x / dMax;
+	int tidx = threadIdx.x - Qt * dMax;
+	//int gbx = low + Qt + blockIdx.x * (blockDim.x / dMax);
+	// int gbx = non_empty_num_indices[blockIdx.x]; // polytope index
+	int gbx = Qt + blockIdx.x * (blockDim.x / dMax); // polytope index
+	int deltaC, DeltaC, nbVer;
+	deltaC = magic_values[0]; // Values should be stored at the end Algo (4.4)
+	DeltaC = magic_values[1]; // The total size needed for each configuration s
+	nbVer  = magic_values[2]; // The maximum number of vertices in each sub-polytope
+
+
+	levL(Ver, C + gbx * DeltaC + deltaC + (m0 + 12) * dMax, levels + gbx * 2 * nbVer,
+		&num[gbx], WB + Qt * 4 * nbN, tidx, 0, dMax - 1, gbx, magic_values);
+
+	// if(num[gbx].ver != 0)
+	// 	printf("%d %d %d\n", gbx,  num[gbx].lvl, num[gbx].ver);
+
+	int pkint; // TODO what is this
+
+	__syncthreads();
+
+	for (l = 0; l < nbVer; l++) {
+		if ((tidx == 0) && (l < num[gbx].lvl)) {
+			pkint = (int)10000000*levels[gbx * 2 * nbVer + l];
+			atomicMin(&MinMax->min, pkint);
+			atomicMax(&MinMax->max, pkint);
+		}
+	}
+
+	if ((tidx == 0)) {
+		atomicMax(&MinMax->final_max, num[gbx].ver);
+	}
 	
 }
 
