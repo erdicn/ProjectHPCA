@@ -1,0 +1,227 @@
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <stdio.h>
+#include <curand_kernel.h>
+
+#include "our_opti_pwlnn.cu"
+
+
+// // Function that catches the error 
+// void testCUDA(cudaError_t error, const char* file, int line) {
+
+// 	if (error != cudaSuccess) {
+// 		printf("There is an error in file %s at line %d\n", file, line);
+// 		exit(EXIT_FAILURE);
+// 	}
+// }
+
+// // Has to be defined in the compilation in order to get the correct value of the 
+// // macros __FILE__ and __LINE__
+// #define testCUDA(error) (testCUDA(error, __FILE__ , __LINE__))
+
+void printArray(int* a, int len){
+	for(int i = 0; i < len; i++){
+		std::cout << a[i] << std::endl;
+	}
+}
+
+
+
+int main(void){
+    // TOOD from file 
+    int domains_CPU[NB_LAYERS];
+    domains_CPU[0] = 2; // input layer
+    for(int i = 1; i < NB_LAYERS-1; i++)
+        domains_CPU[i] = 4; // hidden layers 
+    domains_CPU[NB_LAYERS-1] = 1; // output layer
+
+	// nb_connections_layers+biases = nn_i * nn_i+1 + nn_i+1
+    int sizeWB = 0;
+    for(int i = 0; i < NB_LAYERS-1; i++){
+        sizeWB += (domains_CPU[i]+1) * domains_CPU[i+1];
+    }
+    std::cout << sizeWB << std::endl;
+
+    MinMax_t *min_max;
+	testCUDA(cudaMallocManaged(&min_max, sizeof(MinMax_t)));
+	min_max->min =  5000000;
+	min_max->max = -5000000;
+	min_max->final_max =  0;
+	
+	// testCUDA(cudaMalloc(&min_max, sizeof(MinMax_t)));
+	// testCUDA(cudaMemcpy( min_max , &min_maxCPU, sizeof(MinMax_t), cudaMemcpyHostToDevice));
+	
+    int nb_subpolytopes = 0; // number of possible combinations of neurons active inactive 2^nb_neurons in the hidden layers 
+    for(int i = 1; i < NB_LAYERS-1; i++){
+        nb_subpolytopes += domains_CPU[i];
+    }
+    nb_subpolytopes = 1 << nb_subpolytopes; // 2^nb_neurons
+	
+    // BLACKBOX
+    int deltaSize = 2*domains_CPU[0]; 
+    int sizeB     = 2*domains_CPU[0]; 
+    int sizeCB    = 2*domains_CPU[0];
+    for(int i = 1; i < NB_LAYERS; i++){
+        deltaSize += domains_CPU[i];
+        sizeB     += domains_CPU[i];
+        sizeCB    += domains_CPU[i];
+    }
+    sizeCB *= 1 + domains_CPU[0];
+
+	for(int k = 1; k < 1 + domains_CPU[0]; k++){
+		sizeCB += (deltaSize - k) * (1 + domains_CPU[0] - k);
+		sizeB += (deltaSize - k);
+	}
+	
+	// maximum number of vertices by subpolytope: d0 combinations among m-d0
+    int nb_vertices = 1000; // TODO 
+
+    int magic_valuesCPU[5], *magic_values;
+	// testCUDA(cudaMallocManaged(&magic_values, 5*sizeof(int)));
+    magic_valuesCPU[0] = sizeCB - deltaSize * (1 + domains_CPU[0]); // Values should be stored at the end Algo (4.4) deltaC
+	magic_valuesCPU[1] = sizeCB;  // The total size needed for each configuration s DeltaC
+    magic_valuesCPU[2] = nb_vertices;
+	magic_valuesCPU[3] = sizeB - deltaSize; // Values should be stored at the end Algo (4.4) deltaB
+	magic_valuesCPU[4] = sizeB; // The total size needed for each configuration s DeltaB TODO never used ???
+
+	testCUDA(cudaMalloc(&magic_values, 5 * sizeof(int)));
+	testCUDA(cudaMemcpy( magic_values, magic_valuesCPU, 5 * sizeof(int), cudaMemcpyHostToDevice));
+    testCUDA(cudaMemcpyToSymbol(dld, domains_CPU, NB_LAYERS * sizeof(int), 0, cudaMemcpyHostToDevice));
+	
+	// C is C matrix and beta, levels: list of levels, Ver contains the list of vertices,
+	// R contains the isometry matrices, q contains the translation values
+	float* C, * Ccpu, * levels, * levelscpu, * Ver, * Vercpu, * R, *q;
+	Num_t* num, * numcpu; // contains the true number of vertices and levels
+
+	testCUDA(cudaMalloc(&C, sizeCB * nb_subpolytopes * sizeof(float)));
+	Ccpu = (float*)malloc(  sizeCB * nb_subpolytopes * sizeof(float));
+
+	testCUDA(cudaMalloc(&levels, 2 * nb_vertices * nb_subpolytopes * sizeof(float))); // twice the size to be able to have a sorted list
+	levelscpu = (float*)malloc(      nb_vertices * nb_subpolytopes * sizeof(float));
+	testCUDA(cudaMalloc(&Ver,        nb_vertices * nb_subpolytopes * domains_CPU[0] * sizeof(float)));
+	Vercpu = (float*)malloc(         nb_vertices * nb_subpolytopes * domains_CPU[0] * sizeof(float));
+
+    // TODO how those these work
+	int siV  = (3 + 2); // binding index for volume V
+	int siVD = (2);     // binding index for volume V TODO what are the differnces between them
+	int siR  = (4);     // binding index for volume R
+	int siRD = 0;       // binding index for volume R
+
+	// TODO instead of doing 4 layers do 3 then add it 
+	testCUDA(cudaMalloc(&R, siR * nb_subpolytopes * sizeof(float)));
+	testCUDA(cudaMalloc(&num,     nb_subpolytopes * sizeof(Num_t)));
+	numcpu = (Num_t*)malloc(      nb_subpolytopes * sizeof(Num_t));
+
+	testCUDA(cudaMalloc(&q, nb_subpolytopes * domains_CPU[0] * sizeof(float)));
+	
+	float* WBGPU; // Coefficents of matrices and bias vectors
+
+	testCUDA(cudaMalloc(&WBGPU, sizeWB * sizeof(float)));
+
+	std::string path = "weights.txt";  // path of the file with one value per row
+
+	// Reading the file
+	std::ifstream file(path);
+	if (!file.is_open()) {
+		std::cerr << "Error: impossible to open " << path << std::endl;
+		return 1;
+	}
+
+	std::vector<float> WB_data;
+	WB_data.reserve(sizeWB);
+
+	float value;
+	while (file >> value) {
+		WB_data.push_back(value);
+	}
+	file.close();
+
+	if (WB_data.size() != sizeWB) {
+		std::cerr << "Error: " << WB_data.size() << " read values " << sizeWB << std::endl;
+		return 1;
+	}
+
+	std::cout << "read done of weights: " << WB_data.size() << " floats." << std::endl;
+
+	testCUDA(cudaMemcpy(WBGPU, WB_data.data(), sizeWB * sizeof(float), cudaMemcpyHostToDevice));
+
+	int low = 0;  // the starting index
+	int up = nb_subpolytopes; // the ending index
+	int nbN = 16; // Number of neurones TODO  we should have 15 no ? in the 3d we should have 16
+	
+	testCUDA(cudaMemset(C, 0, nb_subpolytopes * sizeCB * sizeof(float)));
+
+	float timer;
+	cudaEvent_t start, stop;			// GPU timer instructions
+	cudaEventCreate(&start);			// GPU timer instructions
+	cudaEventCreate(&stop);				// GPU timer instructions
+	cudaEventRecord(start, 0);			// GPU timer instructions
+
+	size_t currentLimit;
+	cudaDeviceGetLimit(&currentLimit, cudaLimitStackSize);
+	printf("Current CUDA stack size: %zu bytes\n", currentLimit);
+
+	size_t NcurrentLimit =  64 * currentLimit;
+	cudaDeviceSetLimit(cudaLimitStackSize, NcurrentLimit);
+	cudaDeviceGetLimit(&currentLimit, cudaLimitStackSize);
+	printf("Current CUDA stack size: %zu bytes\n", currentLimit);
+
+	testCUDA(cudaMemset(levels , 0, 2 * nb_vertices * nb_subpolytopes * sizeof(float)));
+	testCUDA(cudaMemset(Ver    , 0,     nb_vertices * nb_subpolytopes * domains_CPU[0] * sizeof(float)));
+	testCUDA(cudaMemset(num    , 0, 2 *               nb_subpolytopes * sizeof(float)));
+
+	//        TODO     TODO      why + 1         
+	// Part_k <<<16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >>>
+	// levL_k <<<16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >>>
+	Part_k <<<16 * 8, 16 * 2 * (domains_CPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * domains_CPU[0])) * sizeof(float) >>>
+			(WBGPU, C, levels, 2 * domains_CPU[0], sizeWB, 
+				low, up, R, q, Ver, num, nbN, 4, 
+				siV, siVD, siR, siRD, min_max, magic_values);
+		
+	testCUDA(cudaDeviceSynchronize());
+	testCUDA(cudaMemcpy(Ccpu  , C  , nb_subpolytopes * sizeCB * sizeof(float)              , cudaMemcpyDeviceToHost));
+	testCUDA(cudaMemcpy(levelscpu , levels , nb_vertices * nb_subpolytopes * sizeof(float)          , cudaMemcpyDeviceToHost));
+	testCUDA(cudaMemcpy(Vercpu, Ver, nb_vertices * nb_subpolytopes * domains_CPU[0] * sizeof(float), cudaMemcpyDeviceToHost));
+	testCUDA(cudaMemcpy(numcpu, num, 2 * nb_subpolytopes * sizeof(float)                   , cudaMemcpyDeviceToHost));
+
+
+	printf("The computed Minimum level %f\n", (float)0.0000001f * min_max->min);
+	printf("The computed Maximum level %f\n", (float)0.0000001f * min_max->max);
+	printf("Number of levels %i\n", min_max->final_max);
+	printf("With notation (index of pol, number of vertices, number of levels), the non-empty polytopes are:\n");
+	int count = 0;
+	for (int k = 0; k < nb_subpolytopes; k++) {
+		if (numcpu[k].ver > 0) {
+			printf("(%d, %d, %d), ", k, numcpu[k].ver, numcpu[k].lvl);
+			count++;
+		}
+	}
+	printf("\n");
+	printf("The number of non-empty polytopes: %d\n", count);
+
+	cudaEventRecord(stop, 0);			// GPU timer instructions
+	cudaEventSynchronize(stop);			// GPU timer instructions
+	cudaEventElapsedTime(&timer,			// GPU timer instructions
+		start, stop);					// GPU timer instructions
+	cudaEventDestroy(start);			// GPU timer instructions
+	cudaEventDestroy(stop);				// GPU timer instructions
+
+	printf("Execution time %f ms\n", timer);
+
+	testCUDA(cudaFree(min_max));
+	testCUDA(cudaFree(C));
+	free(Ccpu);
+	testCUDA(cudaFree(levels));
+	free(levelscpu);
+	testCUDA(cudaFree(Ver));
+	free(Vercpu);
+	testCUDA(cudaFree(R));
+	testCUDA(cudaFree(q));
+	testCUDA(cudaFree(num));
+	free(numcpu);
+	testCUDA(cudaFree(WBGPU));
+	testCUDA(cudaFree(magic_values));
+
+	return 0;
+}

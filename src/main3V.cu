@@ -39,7 +39,7 @@ int main(void) {
 	}
 
 	dCPU[MaxDepth]     = sizeCB - deltaSize * (1 + dCPU[0]); // Values should be stored at the end Algo (4.4) deltaC
-	dCPU[MaxDepth + 1] = sizeCB; // The total size needed for each configuration s DeltaC
+	dCPU[MaxDepth + 1] = sizeCB;  // The total size needed for each configuration s DeltaC
 	dCPU[MaxDepth + 3] = sizeB - deltaSize; // Values should be stored at the end Algo (4.4) deltaB
 	dCPU[MaxDepth + 4] = sizeB; // The total size needed for each configuration s DeltaB
 

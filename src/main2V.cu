@@ -7,6 +7,14 @@
 #include "opti_pwlnn.cu"
 
 
+
+void printArray(int* a, int len){
+	for(int i = 0; i < len; i++){
+		std::cout << a[i] << std::endl;
+	}
+}
+
+
 int main(void) {
 
 	// les couches
@@ -65,6 +73,8 @@ int main(void) {
 	int NbVertices = 1000;
 
 	dCPU[MaxDepth + 2] = NbVertices; // The total size needed for each configuration s
+
+	printArray(dCPU+MaxDepth, 5);
 	
 	cudaMemcpyToSymbol(dld, dCPU, Sizedld * sizeof(int), 0, cudaMemcpyHostToDevice);
 	
@@ -87,6 +97,7 @@ int main(void) {
 	int siR  = (4);     // binding index for volume R
 	int siRD = 0;       // binding index for volume R
 
+	// TODO instead of doing 4 layers do 3 then add it 
 	testCUDA(cudaMalloc(&R, siR * nop * sizeof(float)));
 	testCUDA(cudaMalloc(&num, 2 * nop * sizeof(int)));
 	numcpu = (int*)malloc(    2 * nop * sizeof(float));
@@ -151,6 +162,8 @@ int main(void) {
 
 	//        TODO     TODO      why + 1         
 	Part_k <<<16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >>>
+	// levL_k <<<16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >>>
+	// onlyPartition_k <<<16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >>>
 			(WBGPU, C, levels, 2 * dCPU[0], sizeWB, 
 				low, up, R, q, Ver, num, nbN, 4, 
 				siV, siVD, siR, siRD, MinMax);
