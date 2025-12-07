@@ -1018,13 +1018,13 @@ __global__ void partialPart_k(float* coefs_WlBl, float* C, float* levels,
 // siRD binding index for volume R
 // MinMax[0] and MinMax[1] are respectively the minimal and the maximal values of levels   
 __global__ void levL_k(float* coefs_WlBl, float* C, float* levels,
-						int m0, int nn_data_size, int low, int up, float* R, 
-						float* q, float* Ver, Num_t *num, int nbN, int L, 
+						int m0, int nn_data_size, int low, int up, float* R,
+						float* q, float* Ver, Num_t *num, int nbN, int L,
 						int siV, int siVD, int siR, int siRD, MinMax_t *MinMax, int* magic_values,
 						int* non_empty_num_indices) {
 	int i, l, dMax;
 	// The maximum number of involved threads per configuration (s_1,...,s_{L-1})
-	dMax = dld[0] + 1;			 // number of needed threads = d_0 + 1
+	dMax = dld[0] + 1;			 // number of needed threads = d_0 + 1 (the same as minimum nb of vertices per polytope)
 
 	extern __shared__ float WB[];
 
@@ -1033,15 +1033,16 @@ __global__ void levL_k(float* coefs_WlBl, float* C, float* levels,
 	}
 
 	int Qt = threadIdx.x / dMax;
-	int tidx = threadIdx.x - Qt * dMax;
+	int tidx = threadIdx.x;// - Qt * dMax;
 	//int gbx = low + Qt + blockIdx.x * (blockDim.x / dMax);
-	// int gbx = non_empty_num_indices[blockIdx.x]; // polytope index
-	int gbx = Qt + blockIdx.x * (blockDim.x / dMax); // polytope index
+	int gbx = non_empty_num_indices[blockIdx.x]; // polytope index
+	// int gbx = Qt + blockIdx.x * (blockDim.x / dMax); // polytope index
 	int deltaC, DeltaC, nbVer;
 	deltaC = magic_values[0]; // Values should be stored at the end Algo (4.4)
 	DeltaC = magic_values[1]; // The total size needed for each configuration s
 	nbVer  = magic_values[2]; // The maximum number of vertices in each sub-polytope
-
+	//      non empty num indices[blockIdx.x] 
+	// 10  200   1202  4832  882   292
 
 	levL(Ver, C + gbx * DeltaC + deltaC + (m0 + 12) * dMax, levels + gbx * 2 * nbVer,
 		&num[gbx], WB + Qt * 4 * nbN, tidx, 0, dMax - 1, gbx, magic_values);
@@ -1064,6 +1065,6 @@ __global__ void levL_k(float* coefs_WlBl, float* C, float* levels,
 	if ((tidx == 0)) {
 		atomicMax(&MinMax->final_max, num[gbx].ver);
 	}
-	
+
 }
 

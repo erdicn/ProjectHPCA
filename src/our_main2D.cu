@@ -204,7 +204,7 @@ int main(void){
 
 
 	
-	levL_k <<<counter_non_empty_num, 16 * 2 * min_nb_vertices_by_polytope, (sizeWB + 16 * 2 * max(nbN * 4, 15 * domains_CPU[0])) * sizeof(float) >>>
+	levL_k <<<counter_non_empty_num, min_nb_vertices_by_polytope, (sizeWB + 16 * 2 * max(nbN * 4, 15 * domains_CPU[0])) * sizeof(float) >>>
 			(WBGPU, C, levels, 2 * domains_CPU[0], sizeWB, 
 				low, up, R, q, Ver, num, nbN, 4, 
 				siV, siVD, siR, siRD, min_max, magic_values, non_empty_num_indices);
