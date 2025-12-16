@@ -1,32 +1,28 @@
+/**************************************************************
+Lokman A. Abbas-Turki code
+
+Those who re-use this code should mention in their code
+the name of the author above.
+***************************************************************/
 #include <iostream>
 #include <fstream>
+#include <vector>
 #include <stdio.h>
 #include <curand_kernel.h>
 
-#include "our_includes.cu"
-
-typedef struct {
-    int ver;
-    int lvl;
-} Num_t;
+#define MaxDepth 16
+#define Sizedld (MaxDepth + 5)
 
 
-typedef struct {
-	int min;
-    int max;
-    int final_max;
-} MinMax_t;
-
-//             TODO   2^24
-__device__ float WG[16777216*2];
-__constant__ int dld[NB_LAYERS];
+__device__ float WG[16777216];
+__constant__ int dld[Sizedld];
 
 
 // Function that catches the error 
 void testCUDA(cudaError_t error, const char* file, int line) {
 
 	if (error != cudaSuccess) {
-		printf("There is an error (%d) in file %s at line %d\n", error, file, line);
+		printf("There is an error in file %s at line %d\n", file, line);
 		exit(EXIT_FAILURE);
 	}
 }
@@ -51,8 +47,8 @@ Algorithm 4.3 in Global Maximization of piecewise linear Feedforward Neural Netw
 // flag test whether the computations have to be done
 // gbx the polytope index, in case we want to debug
 // i and tr indices of the recursionin dimension 3, in case we want to debug
-__device__ void oneDimVertices(float* Ver, float* C, float* R, float* q, Num_t *num, float* Wl, 
-								int tidx, int rnm1, float eps, int K, int *flag, int gbx, int i, int* tr, int* magic_values) {
+__device__ void oneDimVertices(float* Ver, float* C, float* R, float* q, int *num, float* Wl, 
+								int tidx, int rnm1, float eps, int K, int *flag, int gbx, int i, int* tr) {
 
 	float *loc1, *loc2, *MLB, *MGB, *v;
 	int j, k, f0, f00, f2, *f1, *Imgb, *Imlb;
@@ -60,9 +56,9 @@ __device__ void oneDimVertices(float* Ver, float* C, float* R, float* q, Num_t *
 	k = K;
 
 	float* V;
-	
-	V = Ver + gbx * magic_values[2] * dld[0]; // When the shared memory is not sufficient
-	// printf("%f\n", V);
+
+	V = Ver + gbx * dld[MaxDepth + 2] * dld[0]; // When the shared memory is not sufficient
+
 	v = Wl;
 	loc2 = v + k;
 
@@ -185,7 +181,7 @@ __device__ void oneDimVertices(float* Ver, float* C, float* R, float* q, Num_t *
 
 	f1[tidx] = 1;
 	
-	for (j = tidx; (j < num->ver) && f0; j += dld[0] + 1) {
+	for (j = tidx; (j < num[0]) && f0; j += dld[0] + 1) {
 		loc3 = 0.0f;
 		for (k = 0; k < dld[0]; k++) {
 			loc3 += (v[k] - V[j * dld[0] + k]) * (v[k] - V[j * dld[0] + k]);
@@ -204,10 +200,10 @@ __device__ void oneDimVertices(float* Ver, float* C, float* R, float* q, Num_t *
 
 	if (f0 * f1[0]) {
 		if (tidx < dld[0]) {
-			V[num->ver * dld[0] + tidx] = v[tidx];
+			V[num[0] * dld[0] + tidx] = v[tidx];
 		}
 		if (tidx == 0) {
-			num->ver++;
+			num[0]++;
 		}
 	}
 	__syncthreads();
@@ -245,7 +241,7 @@ __device__ void oneDimVertices(float* Ver, float* C, float* R, float* q, Num_t *
 
 	f1[tidx] = 1;
 
-	for (j = tidx; (j < num->ver) && f0; j += dld[0] + 1) {
+	for (j = tidx; (j < num[0]) && f0; j += dld[0] + 1) {
 		loc3 = 0.0f;
 		for (k = 0; k < dld[0]; k++) {
 			loc3 += (v[k] - V[j * dld[0] + k]) * (v[k] - V[j * dld[0] + k]);
@@ -266,10 +262,10 @@ __device__ void oneDimVertices(float* Ver, float* C, float* R, float* q, Num_t *
 
 	if (f0 * f1[0]) {
 		if (tidx < dld[0]) {
-			V[num->ver * dld[0] + tidx] = v[tidx];
+			V[num[0] * dld[0] + tidx] = v[tidx];
 		}
 		if (tidx == 0) {
-			num->ver++;
+			num[0]++;
 		}
 	}
 	__syncthreads();
@@ -295,13 +291,13 @@ __device__ float normCri(float* C, int r, float* Wl, int tidx, int K) {
 	__syncthreads();
 
 	k /= 2;
-	while (k > 0) {
-		if (tidx < k) {
-			Wl[tidx] += Wl[tidx + k];
+		while (k > 0) {
+			if (tidx < k) {
+				Wl[tidx] += Wl[tidx + k];
+			}
+			k /= 2;
+			__syncthreads();
 		}
-		k /= 2;
-		__syncthreads();
-	}
 	loc = Wl[0];
 
 	return loc;
@@ -514,12 +510,11 @@ Algorithm 4.2 in "Global Maximization of piecewise linear Feedforward Neural Net
 // num contains the number of vertices
 // gbx the polytope index, in case we want to debug
 // i and tr indices of the recursion in dimension 3, in case we want to debug
-// Gets the vertices list corresponding to each polytope 
 __device__ void Vertices(float* Ver, float* C, float* R, float* q, int r, int rnm1,
-	float* WB, int tidx, float eps, int* flag, Num_t* num, int gbx, int i, int *tr, int* magic_values) {
+	float* WB, int tidx, float eps, int* flag, int* num, int gbx, int i, int *tr) {
 
 	int k, f1, f2;
-	// printf("r= %i", r)
+
 	if (r == 1) {
 		f1 = (rnm1 > 2) * (rnm1 != 4); // When f1 is not true, it means that rnm1 is a power of two
 		f2 = (rnm1 / 2 < 2); // The closest power of two is 4 otherwise 8
@@ -529,7 +524,7 @@ __device__ void Vertices(float* Ver, float* C, float* R, float* q, int r, int rn
 		k = f1 * 16 + f2 * 32 + (1 - f1) * (1 - f2) * k;
 		f1 = (rnm1 > 32) && (rnm1 <= 64);
 		k = f1 * 64 + (1 - f1) * k;
-		oneDimVertices(Ver, C, R, q, num, WB, tidx, rnm1, eps, k, flag, gbx, i, tr, magic_values);
+		oneDimVertices(Ver, C, R, q, num, WB, tidx, rnm1, eps, k, flag, gbx, i, tr);
 	}
 	else {
 		f1 = (r > 2) * (r != 4); // When f1 is not true, it means that r is a power of two
@@ -548,7 +543,7 @@ __device__ void Vertices(float* Ver, float* C, float* R, float* q, int r, int rn
 			}
 			__syncthreads();
 			Vertices(Ver, C - r * (rnm1 - 1), R - (r - 1) * (r - 1) * (r > 2), q,
-						r - 1, rnm1 - 1, WB, tidx, eps, &f1, num, gbx, i, tr, magic_values);
+						r - 1, rnm1 - 1, WB, tidx, eps, &f1, num, gbx, i, tr);
 		}
 	}
 }
@@ -558,7 +553,7 @@ __device__ void Vertices(float* Ver, float* C, float* R, float* q, int r, int rn
 Algorithm 4.2 in Global Maximization of piecewise linear Feedforward Neural Network
 ****************************************************************************************************/
 // Ver contains the list of vertices
-// C contains both the C matrix and beta IMPORTANT TO give the correct C 
+// C contains both the C matrix and beta
 // R contains the isometry matrices
 // q contains the translation values
 // r the original dimension given as an input
@@ -570,33 +565,29 @@ Algorithm 4.2 in Global Maximization of piecewise linear Feedforward Neural Netw
 // num contains the number of vertices as well as the number of levels
 // gbx the polytope index, in case we want to debug
 // i and tr indices of the recursion in dimension 3, in case we want to debug
-__device__ void levL(float* Ver, float* C, float* levels, Num_t* num, float* Wl,
-						int tidx, float eps, int r, int gbx, int* magic_values) {
+__device__ void levL(float* Ver, float* C, float* LL, int* num, float* Wl,
+						int tidx, float eps, int r, int gbx) {
 
 	int K, f1, f2, i, j, k, del, numTemp;
 	int* Wl2;
 	float* V; 
-	del = magic_values[2];
+	del = dld[MaxDepth + 2];
 	V = Ver + gbx * del * dld[0];
 
 	// The closest power of two when r <= 8 
 	K = (r == 1) + 2 * (r == 2) + 4 * (r == 3) + 4 * (r == 4) + 8 * (r > 5);
 
-
 	//Wl2 = (int*)WG + gbx * 512; // alternative to the use of shared memory
 	Wl2 = (int*)Wl + K;
 
 	for (i = 0; i < del; i++) {
-		numTemp = num->lvl;
-		f1 = (num->ver > i);
-		// PART WHERE THE COMPUTATIONS ARE DONE CHECKING IF I IS LARGER THAN THE NUMBER OF VERTIVCES 
-		//                EXPRESSION 15 
+		numTemp = num[1];
+		f1 = (num[0] > i);
+
 		for (j = tidx; j < K && f1; j += (r + 1)) {
-			f2 = (j < r);// linear part 			 		beta part
-			printf("f2= %i, j= %i, r= %i, i= %i \n", f2, j, r, i); 
+			f2 = (j < r);
 			Wl[j] = f2 * C[j * f2] * V[i * r + j * f2] - (j == 0) * C[r];
-		}                            
-		// THE SUM at the exp 15 is paralelized 
+		}
 		__syncthreads();
 		k = K / 2;
 		while (k > 0) {
@@ -607,19 +598,19 @@ __device__ void levL(float* Ver, float* C, float* levels, Num_t* num, float* Wl,
 			__syncthreads();
 		}
 		if ((numTemp == 0) && f1 && (tidx == 0)) {
-			levels[0] = Wl[0];
-			num->lvl += 1;
+			LL[0] = Wl[0];
+			num[1] += 1;
 		}
 		if ((numTemp == 1) && f1 && (tidx == 0)) {
-			k = (fabsf(levels[((i + 1) % 2) * del] - Wl[0]) > eps);
+			k = (fabsf(LL[((i + 1) % 2) * del] - Wl[0]) > eps);
 			if (k) {
-				j = (levels[((i + 1) % 2) * del] < Wl[0]);
-				levels[(i % 2) * del] = j * levels[((i + 1) % 2) * del] + (1 - j) * Wl[0];
-				levels[(i % 2) * del + 1] = j * Wl[0] + (1 - j) * levels[((i + 1) % 2) * del];
-				num->lvl += 1;
+				j = (LL[((i + 1) % 2) * del] < Wl[0]);
+				LL[(i % 2) * del] = j * LL[((i + 1) % 2) * del] + (1 - j) * Wl[0];
+				LL[(i % 2) * del + 1] = j * Wl[0] + (1 - j) * LL[((i + 1) % 2) * del];
+				num[1] += 1;
 			}
 			else { 
-				levels[(i % 2) * del] = levels[((i + 1) % 2) * del];
+				LL[(i % 2) * del] = LL[((i + 1) % 2) * del];
 			}
 		}
 		if ((numTemp > 1) && f1) {
@@ -631,7 +622,7 @@ __device__ void levL(float* Ver, float* C, float* levels, Num_t* num, float* Wl,
 		if ((numTemp > 1) && f1) {
 			for (k = tidx; (k < numTemp); k += (r + 1)) {
 				f2 = (k < r);
-				Wl2[tidx] *= (fabsf(Wl[0] - levels[((i + 1) % 2) * del + k]) > eps);
+				Wl2[tidx] *= (fabsf(Wl[0] - LL[((i + 1) % 2) * del + k]) > eps);
 			}
 		}
 		__syncthreads();
@@ -646,43 +637,42 @@ __device__ void levL(float* Ver, float* C, float* levels, Num_t* num, float* Wl,
 		if ((numTemp > 1) && f1) {
 			if (1 - Wl2[0]) {
 				for (k = tidx; (k < numTemp); k += (r + 1)) {
-					levels[(i % 2) * del + k] = levels[((i + 1) % 2) * del + k];
+					LL[(i % 2) * del + k] = LL[((i + 1) % 2) * del + k];
 				}
 			}
 			else {
 				for (k = tidx; (k < numTemp + 1); k += (r + 1)) {
 					if ((k > 0) && (k < numTemp)) {
-						j = (levels[((i + 1) % 2) * del + k] < Wl[0]);
-						f2 = (levels[((i + 1) % 2) * del + k - 1] < Wl[0]);
-						levels[(i % 2) * del + k] = levels[((i + 1) % 2) * del + k] * j +
+						j = (LL[((i + 1) % 2) * del + k] < Wl[0]);
+						f2 = (LL[((i + 1) % 2) * del + k - 1] < Wl[0]);
+						LL[(i % 2) * del + k] = LL[((i + 1) % 2) * del + k] * j +
 							(1 - j) * f2 * Wl[0] +
-							(1 - f2) * levels[((i + 1) % 2) * del + k - 1];
+							(1 - f2) * LL[((i + 1) % 2) * del + k - 1];
 					}
 					else {
 						if (k == 0) {
-							j = (levels[((i + 1) % 2) * del] < Wl[0]);
-							levels[(i % 2) * del] = levels[((i + 1) % 2) * del] * j +
+							j = (LL[((i + 1) % 2) * del] < Wl[0]);
+							LL[(i % 2) * del] = LL[((i + 1) % 2) * del] * j +
 								(1 - j) * Wl[0];
 						}
 						else {
-							j = (levels[((i + 1) % 2) * del + numTemp - 1] < Wl[0]);
-							levels[(i % 2) * del + numTemp] = Wl[0] * j +
-								(1 - j) * levels[((i + 1) % 2) * del + numTemp - 1];
+							j = (LL[((i + 1) % 2) * del + numTemp - 1] < Wl[0]);
+							LL[(i % 2) * del + numTemp] = Wl[0] * j +
+								(1 - j) * LL[((i + 1) % 2) * del + numTemp - 1];
 						}
 
 					}
 				}
 				if (tidx == 0) {
-					num->lvl += 1;
+					num[1] += 1;
 				}
 			}
 		}
 		__syncthreads();
 	}
 
-	printf("num->lvl= %i \n", num->lvl);
-	for (k = tidx; k < num->lvl; k += (1 + r)) {
-		levels[(num->ver % 2) * del + k] = levels[((num->ver - 1) % 2) * del + k];
+	for (k = tidx; k < num[1]; k += (1 + r)) {
+		LL[(num[0] % 2) * del + k] = LL[((num[0] - 1) % 2) * del + k];
 	}
 }
 
@@ -690,12 +680,12 @@ __device__ void levL(float* Ver, float* C, float* levels, Num_t* num, float* Wl,
 /****************************************************************************************************
 Partitioning algorithm as in  "Polynomial Distribution of Feedforward Neural Network Output"
 ****************************************************************************************************/
-// coefs_WlBl contains coefficients of matrices and bias vectors
+// WlBl contains coefficients of matrices and bias vectors
 // C contains both the C matrix and beta
 // Contains the values of levels
-// levels list of levels
+// LL list of levels
 // m0 number of rows for the definition of the input compact D_0
-// nn_data_size of data needed (coefficients of matrices and bias vectors) to define the NN
+// size of data needed (coefficients of matrices and bias vectors) to define the NN
 // low the starting index, here = 0 by default
 // up the ending index, here = 4096 by default 
 // V contains the list of volume coefficients 
@@ -710,11 +700,11 @@ Partitioning algorithm as in  "Polynomial Distribution of Feedforward Neural Net
 // siR binding index for volume R
 // siRD binding index for volume R
 // MinMax[0] and MinMax[1] are respectively the minimal and the maximal values of levels   
-__global__ void Part_k(float* coefs_WlBl, float* C, float* levels,
-						int m0, int nn_data_size, int low, int up, float* R, 
-						float* q, float* Ver, Num_t *num, int nbN, int L, 
-						int siV, int siVD, int siR, int siRD, MinMax_t *MinMax, int* magic_values) {
-	
+__global__ void Part_k(float* WlBl, float* C, float* LL,
+						int m0, int size, int low, int up, float* R, 
+						float* q, float* Ver, int *num, int nbN, int L, 
+						int siV, int siVD, int siR, int siRD, int *MinMax) {
+
 	int i, j, l, dMax;
 	float loc;
 	// The maximum number of involved threads per configuration (s_1,...,s_{L-1})
@@ -722,24 +712,25 @@ __global__ void Part_k(float* coefs_WlBl, float* C, float* levels,
 
 	extern __shared__ float WB[];
 	float *sl, *Wl;
-	sl = WB + nn_data_size;
+	sl = WB + size;
 	Wl = sl + nbN*(blockDim.x / dMax);
 	// nbN is the total number of neurons and thus the number of ones and -ones
 
-	for (i = threadIdx.x; i < nn_data_size; i += blockDim.x) {
-		WB[i] = coefs_WlBl[i];
+	for (i = threadIdx.x; i < size; i += blockDim.x) {
+		WB[i] = WlBl[i];
 	}
 
 	int Qt = threadIdx.x / dMax;
 	int tidx = threadIdx.x - Qt * dMax;
 	//int gbx = low + Qt + blockIdx.x * (blockDim.x / dMax);
-	int gbx = Qt + blockIdx.x * (blockDim.x / dMax); // polytope index
+	int gbx = Qt + blockIdx.x * (blockDim.x / dMax);
 	int deltaC, DeltaC, nbVer, val, lim, dl, dlm1;
-	deltaC = magic_values[0]; // Values should be stored at the end Algo (4.4)
-	DeltaC = magic_values[1]; // The total size needed for each configuration s
-	nbVer  = magic_values[2]; // The maximum number of vertices in each sub-polytope
+	deltaC = dld[MaxDepth]; // Values should be stored at the end Algo (4.4)
+	DeltaC = dld[MaxDepth+1]; // The total size needed for each configuration s
+	nbVer = dld[MaxDepth + 2]; // The maximum number of vertices in each sub-polytope
 
-	// Translate with L != 0 as long as Part_k has to b	e executed many times
+
+	// Translate with L != 0 as long as Part_k has to be executed many times
 	if (low + gbx < up) {
 		for (i = tidx; i < nbN; i += dMax) {
 			val = 2 * ((low + gbx >> i) % 2) - 1;
@@ -747,7 +738,6 @@ __global__ void Part_k(float* coefs_WlBl, float* C, float* levels,
 		}
 	}
 	
-	// Computes C_D and Beta_D
 	// Initialization that depends on the definition of the compact set D
 	// As this is the same to all sub-polytops, it has to be computed once, condition (low == 0)
 	if (low == 0) {
@@ -755,11 +745,12 @@ __global__ void Part_k(float* coefs_WlBl, float* C, float* levels,
 		for (i = 0; i < m0; i++) {
 			index = i / 2;
 			C[gbx * DeltaC + deltaC + tidx + i * dMax] = 1.0f * (i == 2 * tidx) * (tidx < (dMax - 1)) -
-														 1.0f * (i == (2 * tidx + 1)) * (tidx < (dMax - 1)) +
+														1.0f * (i == (2 * tidx + 1)) * (tidx < (dMax - 1)) +
 														(2 * index == i) * (tidx == (dMax - 1));
 		}
 	}
 	__syncthreads();
+
 	// This part is related to the computation of C_{1}
 	lim = m0;
 	dl = dld[1];
@@ -811,261 +802,202 @@ __global__ void Part_k(float* coefs_WlBl, float* C, float* levels,
 
 	Vertices(Ver, C + gbx * DeltaC + deltaC, R + gbx * siR + siRD,
 		q + gbx * r, r, rnm1 - 1, WB + Qt * 4 * nbN, tidx, eps, &flag,
-		&num[gbx], gbx + low, 0, &tr, magic_values);
-
-	//                                   (m0 + 12) = nb_of rows of beta, dMax dimension of max since we need to get to the last C   
-	// 				r = dMax - 1
-	levL(Ver, C + gbx * DeltaC + deltaC + (m0 + 12) * dMax, levels + gbx * 2 * nbVer,
-		&num[gbx], WB + Qt * 4 * nbN, tidx, 0, dMax - 1, gbx, magic_values);
-
-	// if(num[gbx].ver != 0)
-	// 	printf("%d %d %d\n", gbx,  num[gbx].lvl, num[gbx].ver);
+		num + gbx * 2, gbx + low, 0, &tr);
 
 
-	int pkint; // TODO what is this
+	levL(Ver, C + gbx * DeltaC + deltaC + (m0 + 12) * dMax, LL + gbx * 2 * nbVer,
+		num + gbx * 2, WB + Qt * 4 * nbN, tidx, 0, dMax - 1, gbx);
+
+	int pkint;
 
 	__syncthreads();
 
 	for (l = 0; l < nbVer; l++) {
-		flag = (l < num[gbx].lvl);
+		flag = (l < num[gbx * 2 + 1]);
 		if ((tidx == 0) && flag) {
-			pkint = (int)10000000*levels[gbx * 2 * nbVer + l];
-			atomicMin(&MinMax->min, pkint);
-			atomicMax(&MinMax->max, pkint);
+			pkint = (int)10000000*LL[gbx * 2 * nbVer + l];
+			atomicMin(MinMax, pkint);
+			atomicMax(MinMax + 1, pkint);
 		}
 	}
 
 	if ((tidx == 0)) {
-		atomicMax(&MinMax->final_max, num[gbx].ver);
+		atomicMax(MinMax + 2, num[gbx * 2 + 1]);
 	}
 
 }
 
-/****************************************************************************************************
-Partitioning algorithm as in  "Polynomial Distribution of Feedforward Neural Network Output"
-****************************************************************************************************/
-// coefs_WlBl contains coefficients of matrices and bias vectors
-// C contains both the C matrix and beta
-// Contains the values of levels
-// levels list of levels
-// m0 number of rows for the definition of the input compact D_0
-// nn_data_size of data needed (coefficients of matrices and bias vectors) to define the NN
-// low the starting index, here = 0 by default
-// up the ending index, here = 4096 by default 
-// V contains the list of volume coefficients 
-// R contains the isometry matrices
-// q contains the translation values
-// Ver contains the list of vertices
-// num contains the number of vertices as well as the number of 
-// nbN number of neurones
-// L number of layers
-// siV binding index for volume V
-// siVD binding index for volume V
-// siR binding index for volume R
-// siRD binding index for volume R
-// MinMax[0] and MinMax[1] are respectively the minimal and the maximal values of levels   
-__global__ void partialPart_k(float* coefs_WlBl, float* C, float* levels,
-						int m0, int nn_data_size, int low, int up, float* R, 
-						float* q, float* Ver, Num_t *num, int nbN, int L, 
-						int siV, int siVD, int siR, int siRD, MinMax_t *MinMax, int* magic_values) {
+
+int main(void) {
+
+	int dCPU[Sizedld];
+	dCPU[0] = 2; // d_0
+	dCPU[1] = 4; // d_1
+	dCPU[2] = 4; // d_2
+	dCPU[3] = 4; // d_3
+	dCPU[4] = 1; // d_4
+
+	int sizeWB = (dCPU[0] + 1) * dCPU[1] +
+				(dCPU[1] + 1) * dCPU[2] +
+				(dCPU[2] + 1) * dCPU[3] +
+				(dCPU[3] + 1) * dCPU[4];
+
+	int* MinMax;
+	cudaMallocManaged(&MinMax, 3*sizeof(int));
+	MinMax[0] = 5000000;
+	MinMax[1] = -5000000;
+	MinMax[2] = 0;
+
+	int nop = 16 * 16 * 16; // Number of subpolytopes
+
+	int deltaSize = (2 * dCPU[0] + dCPU[1] + dCPU[2] + dCPU[3] + dCPU[4]);
 	
-	int i, j, l, dMax;
-	float loc;
-	// The maximum number of involved threads per configuration (s_1,...,s_{L-1})
-	dMax = dld[0] + 1;			 // number of needed threads = d_0 + 1
+	int sizeB = (2 * dCPU[0] + dCPU[1] + dCPU[2] + dCPU[3] + dCPU[4]);
 
-	extern __shared__ float WB[];
-	float *sl, *Wl;
-	sl = WB + nn_data_size;
-	Wl = sl + nbN*(blockDim.x / dMax);
-	// nbN is the total number of neurons and thus the number of ones and -ones
+	int sizeCB = (2 * dCPU[0] + dCPU[1] + dCPU[2] + dCPU[3] + dCPU[4]) * (1 + dCPU[0]);
 
-	for (i = threadIdx.x; i < nn_data_size; i += blockDim.x) {
-		WB[i] = coefs_WlBl[i];
+	for (int k = 1; k < 1 + dCPU[0]; k++) {
+		sizeCB += (deltaSize - k) * (1 + dCPU[0] - k);
+		sizeB += (deltaSize - k);
 	}
 
-	int Qt = threadIdx.x / dMax;
-	int tidx = threadIdx.x - Qt * dMax;
-	//int gbx = low + Qt + blockIdx.x * (blockDim.x / dMax);
-	int gbx = Qt + blockIdx.x * (blockDim.x / dMax); // polytope index
-	int deltaC, DeltaC, nbVer, val, lim, dl, dlm1;
-	deltaC = magic_values[0]; // Values should be stored at the end Algo (4.4)
-	DeltaC = magic_values[1]; // The total size needed for each configuration s
-	nbVer  = magic_values[2]; // The maximum number of vertices in each sub-polytope
+	dCPU[MaxDepth] = sizeCB - deltaSize * (1 + dCPU[0]); // Values should be stored at the end Algo (4.4) deltaC
+	dCPU[MaxDepth + 1] = sizeCB; // The total size needed for each configuration s DeltaC
+	dCPU[MaxDepth + 3] = sizeB - deltaSize; // Values should be stored at the end Algo (4.4) deltaB
+	dCPU[MaxDepth + 4] = sizeB; // The total size needed for each configuration s DeltaB
 
-	// Translate with L != 0 as long as Part_k has to be executed many times
-	if (low + gbx < up) {
-		for (i = tidx; i < nbN; i += dMax) {
-			val = 2 * ((low + gbx >> i) % 2) - 1;
-			sl[i + Qt * nbN] = 1.0f*(val>=0) - 0.01f*(val<0);
-		}
-	}
+	// maximum number of vertices by subpolytope: d0 combinations among m-d0
+	int NbVertices = 1000;
+
+	dCPU[MaxDepth + 2] = NbVertices; // The total size needed for each configuration s
 	
-	// Computes C_D and Beta_D
-	// Initialization that depends on the definition of the compact set D
-	// As this is the same to all sub-polytops, it has to be computed once, condition (low == 0)
-	if (low == 0) {
-		int index;
-		for (i = 0; i < m0; i++) {
-			index = i / 2;
-			C[gbx * DeltaC + deltaC + tidx + i * dMax] = 1.0f * (i == 2 * tidx) * (tidx < (dMax - 1)) -
-														 1.0f * (i == (2 * tidx + 1)) * (tidx < (dMax - 1)) +
-														(2 * index == i) * (tidx == (dMax - 1));
-		}
-	}
-	__syncthreads();
+	cudaMemcpyToSymbol(dld, dCPU, Sizedld * sizeof(int), 0, cudaMemcpyHostToDevice);
 
-	// This part is related to the computation of C_{1}
-	lim = m0;
-	dl = dld[1];
-	for (i = lim; i < lim + dl; i++) { // C starts at the right place at + m0*dMax
-		val = (sl[i-lim + Qt * nbN]>=0) - (sl[i - lim + Qt * nbN] < 0);
-		C[gbx * DeltaC + deltaC + tidx + i * dMax] = -(tidx < (dMax - 1)) * val * WB[tidx + (i - lim) * dMax] +
-														(tidx == (dMax - 1)) * val * WB[tidx + (i - lim) * dMax];
-		}
+	float* C, * Ccpu, * LL, * LLcpu, * Ver, * Vercpu, * R, *q;
+	int* num, * numcpu; // contains the true number of vertices and levels
+
+	testCUDA(cudaMalloc(&C, sizeCB * nop * sizeof(float)));
+	Ccpu = (float*)malloc(sizeCB * nop * sizeof(float));
+
+	testCUDA(cudaMalloc(&LL, 2 * NbVertices * nop * sizeof(float))); // twice the size to be able to have a sorted list
+	LLcpu = (float*)malloc(NbVertices * nop * sizeof(float));
+	testCUDA(cudaMalloc(&Ver, NbVertices * nop * dCPU[0] * sizeof(float)));
+	Vercpu = (float*)malloc(NbVertices * nop * dCPU[0] * sizeof(float));
+
+	int siV = (3 + 2);
+	int siVD = (2);
+	int siR = (4);
+	int siRD = 0;
+
+	testCUDA(cudaMalloc(&R, siR * nop * sizeof(float)));
+	testCUDA(cudaMalloc(&num, 2 * nop * sizeof(int)));
+	numcpu = (int*)malloc(2 * nop * sizeof(float));
+
+	testCUDA(cudaMalloc(&q, nop * dCPU[0] * sizeof(float)));
 	
-	lim = 0;
-	int dlmDelta = 0;
-	// This part is related to the computation of C_{l}
-	for (l = 2; l < L + 1; l++) {
-		lim += dld[l - 1] * (dld[l - 2] + 1);
-		dl = dld[l];
-		dlm1 = dld[l - 1];
-		dlmDelta += dlm1;
-		for(j=0; j<dl; j++){
-			if (l < L) {
-				val = (sl[j + Qt * nbN + dlmDelta] >= 0) - (sl[j + Qt * nbN + dlmDelta] < 0);
-			}
-			else { val = -1; }
-			// Starting with diag(s_{l})*W_{l}*diag(a(s_{l-1})) row by row
-			for (i = tidx; i < dlm1; i += dMax) {
-				Wl[i + Qt * dlm1] = val * WB[lim + j * (dlm1 + 1) + i] * sl[i + dlmDelta - dlm1 + Qt * nbN];
-			}
-			__syncthreads();
-			
-			loc = 0.0f;
-			for (i = 0; i < dlm1; i++) {
-				loc += Wl[i + Qt * dlm1] * C[gbx * DeltaC + deltaC + tidx + (i + m0 + dlmDelta - dlm1) * dMax];
-			}
-			C[gbx * DeltaC + deltaC + tidx + (j + m0 + dlmDelta) * dMax] = loc + (tidx == (dMax - 1)) * val * WB[lim + j * (dlm1 + 1) + dlm1];			
-			__syncthreads();
-			
-		}
+	float* WBGPU;
+
+	testCUDA(cudaMalloc(&WBGPU, sizeWB * sizeof(float)));
+
+	std::string path = "weights.txt";  // path of the file with one value per row
+
+	// Reading the file
+	std::ifstream file(path);
+	if (!file.is_open()) {
+		std::cerr << "Error: impossible to open " << path << std::endl;
+		return 1;
 	}
 
-	int flag = 1; // if 1 computations performed, when flag switches to 0 the threads are only involved in synchronization 
+	std::vector<float> WB_data;
+	WB_data.reserve(sizeWB);
 
-	int r = dMax - 1; // r = d0
+	float value;
+	while (file >> value) {
+		WB_data.push_back(value);
+	}
+	file.close();
 
-	float eps = 0.0f; // replaces the true zero : targetted precision
+	if (WB_data.size() != sizeWB) {
+		std::cerr << "Error: " << WB_data.size() << " read values " << sizeWB << std::endl;
+		return 1;
+	}
 
-	int rnm1 = m0 + dlmDelta + dl;	 // This is what is called  nrow(C[r-1]) - 1 for r = d0 in Algo 4.4 or m in Algo 4.1
+	std::cout << "read done of weights: " << WB_data.size() << " floats." << std::endl;
 
-	__syncthreads();
+	testCUDA(cudaMemcpy(WBGPU, WB_data.data(), sizeWB * sizeof(float), cudaMemcpyHostToDevice));
 
-	int tr = 100;
+	int low = 0;
+	int up = nop;
+	int nbN = 16; // Number of neurones;
+	
+	testCUDA(cudaMemset(C, 0, nop * sizeCB * sizeof(float)));
 
-	Vertices(Ver, C + gbx * DeltaC + deltaC, R + gbx * siR + siRD,
-		q + gbx * r, r, rnm1 - 1, WB + Qt * 4 * nbN, tidx, eps, &flag,
-		&num[gbx], gbx + low, 0, &tr, magic_values);
+	float Tim;
+	cudaEvent_t start, stop;			// GPU timer instructions
+	cudaEventCreate(&start);			// GPU timer instructions
+	cudaEventCreate(&stop);				// GPU timer instructions
+	cudaEventRecord(start, 0);			// GPU timer instructions
 
-	//                                   (m0 + 12) = nb_of rows of beta, dMax dimension of max since we need to get to the last C   
-	// 				r = dMax - 1
-	// levL(Ver, C + gbx * DeltaC + deltaC + (m0 + 12) * dMax, levels + gbx * 2 * nbVer,
-	// 	&num[gbx], WB + Qt * 4 * nbN, tidx, 0, dMax - 1, gbx, magic_values);
+	size_t currentLimit;
+	cudaDeviceGetLimit(&currentLimit, cudaLimitStackSize);
+	printf("Current CUDA stack size: %zu bytes\n", currentLimit);
 
-	// // if(num[gbx].ver != 0)
-	// // 	printf("%d %d %d\n", gbx,  num[gbx].lvl, num[gbx].ver);
+	size_t NcurrentLimit =  64 * currentLimit;
+	cudaDeviceSetLimit(cudaLimitStackSize, NcurrentLimit);
+	cudaDeviceGetLimit(&currentLimit, cudaLimitStackSize);
+	printf("Current CUDA stack size: %zu bytes\n", currentLimit);
+
+	testCUDA(cudaMemset(LL, 0, 2 * NbVertices * nop * sizeof(float)));
+	testCUDA(cudaMemset(Ver, 0, NbVertices * nop * dCPU[0] * sizeof(float)));
+	testCUDA(cudaMemset(num, 0, 2 * nop * sizeof(float)));
+
+	Part_k << <16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >> > (WBGPU,
+																							C, LL, 2 * dCPU[0], sizeWB,
+																							low, up, R, q, Ver, num, nbN, 4,
+																							siV, siVD, siR, siRD, MinMax);
+		
+	cudaDeviceSynchronize();
+	testCUDA(cudaMemcpy(Ccpu, C, nop * sizeCB * sizeof(float), cudaMemcpyDeviceToHost));
+	testCUDA(cudaMemcpy(LLcpu, LL, NbVertices * nop * sizeof(float), cudaMemcpyDeviceToHost));
+	testCUDA(cudaMemcpy(Vercpu, Ver, NbVertices * nop * dCPU[0] * sizeof(float), cudaMemcpyDeviceToHost));
+	testCUDA(cudaMemcpy(numcpu, num, 2 * nop * sizeof(float), cudaMemcpyDeviceToHost));
 
 
-	// int pkint; // TODO what is this
+	printf("The computed Minimum level %f\n", (float)0.0000001f * MinMax[0]);
+	printf("The computed Maximum level %f\n", (float)0.0000001f * MinMax[1]);
+	printf("Number of levels %i\n", MinMax[2]);
+	printf("With notation (index of pol, number of vertices, number of levels), the non-empty polytopes are:\n");
+	int count = 0;
+	for (int k = 0; k < nop; k++) {
+		if (numcpu[2 * k] > 0) {
+			printf("(%d, %d, %d), ", k, numcpu[2 * k], numcpu[2 * k + 1]);
+			count++;
+		}
+	}
+	printf("\n");
+	printf("The number of non-empty polytopes: %d\n", count);
 
-	// __syncthreads();
+	cudaEventRecord(stop, 0);			// GPU timer instructions
+	cudaEventSynchronize(stop);			// GPU timer instructions
+	cudaEventElapsedTime(&Tim,			// GPU timer instructions
+		start, stop);					// GPU timer instructions
+	cudaEventDestroy(start);			// GPU timer instructions
+	cudaEventDestroy(stop);				// GPU timer instructions
 
-	// for (l = 0; l < nbVer; l++) {
-	// 	flag = (l < num[gbx].lvl);
-	// 	if ((tidx == 0) && flag) {
-	// 		pkint = (int)10000000*levels[gbx * 2 * nbVer + l];
-	// 		atomicMin(&MinMax->min, pkint);
-	// 		atomicMax(&MinMax->max, pkint);
-	// 	}
-	// }
+	printf("Execution time %f ms\n", Tim);
 
-	// if ((tidx == 0)) {
-	// 	atomicMax(&MinMax->final_max, num[gbx].ver);
-	// }
+	testCUDA(cudaFree(MinMax));
+	testCUDA(cudaFree(C));
+	free(Ccpu);
+	testCUDA(cudaFree(LL));
+	free(LLcpu);
+	testCUDA(cudaFree(Ver));
+	free(Vercpu);
+	testCUDA(cudaFree(R));
+	testCUDA(cudaFree(q));
+	testCUDA(cudaFree(num));
+	free(numcpu);
+	testCUDA(cudaFree(WBGPU));
 
+	return 0;
 }
-
-
-
-
-// coefs_WlBl contains coefficients of matrices and bias vectors
-// C contains both the C matrix and beta
-// Contains the values of levels
-// levels list of levels
-// m0 number of rows for the definition of the input compact D_0
-// nn_data_size of data needed (coefficients of matrices and bias vectors) to define the NN
-// low the starting index, here = 0 by default
-// up the ending index, here = 4096 by default 
-// V contains the list of volume coefficients 
-// R contains the isometry matrices
-// q contains the translation values
-// Ver contains the list of vertices
-// num contains the number of vertices as well as the number of 
-// nbN number of neurones
-// L number of layers
-// siV binding index for volume V
-// siVD binding index for volume V
-// siR binding index for volume R
-// siRD binding index for volume R
-// MinMax[0] and MinMax[1] are respectively the minimal and the maximal values of levels   
-__global__ void levL_k(float* coefs_WlBl, float* C, float* levels,
-						int m0, int nn_data_size, int low, int up, float* R, 
-						float* q, float* Ver, Num_t *num, int nbN, int L, 
-						int siV, int siVD, int siR, int siRD, MinMax_t *MinMax, int* magic_values,
-						int* non_empty_num_indices) {
-	int i, l, dMax;
-	// The maximum number of involved threads per configuration (s_1,...,s_{L-1})
-	dMax = dld[0] + 1;			 // number of needed threads = d_0 + 1
-
-	extern __shared__ float WB[];
-
-	for (i = threadIdx.x; i < nn_data_size; i += blockDim.x) {
-		WB[i] = coefs_WlBl[i];
-	}
-
-	int Qt = threadIdx.x;// / dMax;
-	int tidx = threadIdx.x - Qt * dMax;
-	//int gbx = low + Qt + blockIdx.x * (blockDim.x / dMax);
-	int gbx = non_empty_num_indices[blockIdx.x]; // polytope index
-	// int gbx = Qt + blockIdx.x * (blockDim.x / dMax); // polytope index
-	int deltaC, DeltaC, nbVer;
-	deltaC = magic_values[0]; // Values should be stored at the end Algo (4.4)
-	DeltaC = magic_values[1]; // The total size needed for each configuration s
-	nbVer  = magic_values[2]; // The maximum number of vertices in each sub-polytope
-
-	levL(Ver, C + gbx * DeltaC + deltaC + (m0 + 12) * dMax, levels + gbx * 2 * nbVer,
-		&num[gbx], WB + Qt * 4 * nbN, tidx, 0, dMax - 1, gbx, magic_values);
-
-	// if(num[gbx].ver != 0)
-	// 	printf("%d %d %d\n", gbx,  num[gbx].lvl, num[gbx].ver);
-
-	int pkint; // TODO what is this
-
-	__syncthreads();
-
-	for (l = 0; l < nbVer; l++) {
-		if ((tidx == 0) && (l < num[gbx].lvl)) {
-			pkint = (int)10000000*levels[gbx * 2 * nbVer + l];
-			atomicMin(&MinMax->min, pkint);
-			atomicMax(&MinMax->max, pkint);
-		}
-	}
-
-	if ((tidx == 0)) {
-		atomicMax(&MinMax->final_max, num[gbx].ver);
-	}
-	
-}
-

@@ -72,8 +72,9 @@ int main(void){
 
 	for(int k = 1; k < 1 + domains_CPU[0]; k++){
 		sizeCB += (deltaSize - k) * (1 + domains_CPU[0] - k);
-		sizeB  += (deltaSize - k);
+		sizeB += (deltaSize - k);
 	}
+	
 	// maximum number of vertices by subpolytope: d0 combinations among m-d0
     int nb_vertices = 1000; // TODO 
 
@@ -173,13 +174,11 @@ int main(void){
 	testCUDA(cudaMemset(Ver    , 0,     nb_vertices * nb_subpolytopes * domains_CPU[0] * sizeof(float)));
 	testCUDA(cudaMemset(num    , 0, 2 *               nb_subpolytopes * sizeof(float)));
 
-	//        TODO     TODO             
-	// Part_k <<<16 * 8, 16 * 2 * (domains_CPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * domains_CPU[0])) * sizeof(float) >>>
-	// 		(WBGPU, C, levels, 2 * domains_CPU[0], sizeWB, 
-	// 			low, up, R, q, Ver, num, nbN, 4, 
-	// 			siV, siVD, siR, siRD, min_max, magic_values);
+	//        TODO     TODO      why + 1         
+	// Part_k <<<16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >>>
 	// levL_k <<<16 * 8, 16 * 2 * (dCPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * dCPU[0])) * sizeof(float) >>>
-	partialPart_k <<<16 * 8, 16 * 2 * (domains_CPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * domains_CPU[0])) * sizeof(float) >>>
+	int min_nb_vertices_by_polytope = domains_CPU[0] + 1; // d0 + 1 = minimum number of vertices for a d0 dimension polytope
+	partialPart_k <<<16 * 8, 16 * 2 * min_nb_vertices_by_polytope, (sizeWB + 16 * 2 * max(nbN * 4, 15 * domains_CPU[0])) * sizeof(float) >>>
 			(WBGPU, C, levels, 2 * domains_CPU[0], sizeWB, 
 				low, up, R, q, Ver, num, nbN, 4, 
 				siV, siVD, siR, siRD, min_max, magic_values);
@@ -205,7 +204,7 @@ int main(void){
 
 
 	
-	levL_k <<<16*8, 16 * 2 * (domains_CPU[0] + 1), (sizeWB + 16 * 2 * max(nbN * 4, 15 * domains_CPU[0])) * sizeof(float) >>>
+	levL_k <<<counter_non_empty_num, 16 * 2 * min_nb_vertices_by_polytope, (sizeWB + 16 * 2 * max(nbN * 4, 15 * domains_CPU[0])) * sizeof(float) >>>
 			(WBGPU, C, levels, 2 * domains_CPU[0], sizeWB, 
 				low, up, R, q, Ver, num, nbN, 4, 
 				siV, siVD, siR, siRD, min_max, magic_values, non_empty_num_indices);

@@ -18,7 +18,7 @@ typedef struct {
 } MinMax_t;
 
 //             TODO   2^24
-__device__ float WG[16777216*2];
+__device__ float WG[16777216];
 __constant__ int dld[NB_LAYERS];
 
 
@@ -582,7 +582,6 @@ __device__ void levL(float* Ver, float* C, float* levels, Num_t* num, float* Wl,
 	// The closest power of two when r <= 8 
 	K = (r == 1) + 2 * (r == 2) + 4 * (r == 3) + 4 * (r == 4) + 8 * (r > 5);
 
-
 	//Wl2 = (int*)WG + gbx * 512; // alternative to the use of shared memory
 	Wl2 = (int*)Wl + K;
 
@@ -592,10 +591,9 @@ __device__ void levL(float* Ver, float* C, float* levels, Num_t* num, float* Wl,
 		// PART WHERE THE COMPUTATIONS ARE DONE CHECKING IF I IS LARGER THAN THE NUMBER OF VERTIVCES 
 		//                EXPRESSION 15 
 		for (j = tidx; j < K && f1; j += (r + 1)) {
-			f2 = (j < r);// linear part 			 		beta part
-			printf("f2= %i, j= %i, r= %i, i= %i \n", f2, j, r, i); 
+			f2 = (j < r);// linear part 			 		beta part 
 			Wl[j] = f2 * C[j * f2] * V[i * r + j * f2] - (j == 0) * C[r];
-		}                            
+		}                                
 		// THE SUM at the exp 15 is paralelized 
 		__syncthreads();
 		k = K / 2;
@@ -680,7 +678,6 @@ __device__ void levL(float* Ver, float* C, float* levels, Num_t* num, float* Wl,
 		__syncthreads();
 	}
 
-	printf("num->lvl= %i \n", num->lvl);
 	for (k = tidx; k < num->lvl; k += (1 + r)) {
 		levels[(num->ver % 2) * del + k] = levels[((num->ver - 1) % 2) * del + k];
 	}
@@ -739,7 +736,7 @@ __global__ void Part_k(float* coefs_WlBl, float* C, float* levels,
 	DeltaC = magic_values[1]; // The total size needed for each configuration s
 	nbVer  = magic_values[2]; // The maximum number of vertices in each sub-polytope
 
-	// Translate with L != 0 as long as Part_k has to b	e executed many times
+	// Translate with L != 0 as long as Part_k has to be executed many times
 	if (low + gbx < up) {
 		for (i = tidx; i < nbN; i += dMax) {
 			val = 2 * ((low + gbx >> i) % 2) - 1;
@@ -760,6 +757,7 @@ __global__ void Part_k(float* coefs_WlBl, float* C, float* levels,
 		}
 	}
 	__syncthreads();
+
 	// This part is related to the computation of C_{1}
 	lim = m0;
 	dl = dld[1];
@@ -922,7 +920,7 @@ __global__ void partialPart_k(float* coefs_WlBl, float* C, float* levels,
 		val = (sl[i-lim + Qt * nbN]>=0) - (sl[i - lim + Qt * nbN] < 0);
 		C[gbx * DeltaC + deltaC + tidx + i * dMax] = -(tidx < (dMax - 1)) * val * WB[tidx + (i - lim) * dMax] +
 														(tidx == (dMax - 1)) * val * WB[tidx + (i - lim) * dMax];
-		}
+	}
 	
 	lim = 0;
 	int dlmDelta = 0;
@@ -947,9 +945,8 @@ __global__ void partialPart_k(float* coefs_WlBl, float* C, float* levels,
 			for (i = 0; i < dlm1; i++) {
 				loc += Wl[i + Qt * dlm1] * C[gbx * DeltaC + deltaC + tidx + (i + m0 + dlmDelta - dlm1) * dMax];
 			}
-			C[gbx * DeltaC + deltaC + tidx + (j + m0 + dlmDelta) * dMax] = loc + (tidx == (dMax - 1)) * val * WB[lim + j * (dlm1 + 1) + dlm1];			
+			C[gbx * DeltaC + deltaC + tidx + (j + m0 + dlmDelta) * dMax] = loc + (tidx == (dMax - 1)) * val * WB[lim + j * (dlm1 + 1) + dlm1];
 			__syncthreads();
-			
 		}
 	}
 
@@ -1035,15 +1032,16 @@ __global__ void levL_k(float* coefs_WlBl, float* C, float* levels,
 		WB[i] = coefs_WlBl[i];
 	}
 
-	int Qt = threadIdx.x;// / dMax;
+	int Qt = threadIdx.x / dMax;
 	int tidx = threadIdx.x - Qt * dMax;
 	//int gbx = low + Qt + blockIdx.x * (blockDim.x / dMax);
-	int gbx = non_empty_num_indices[blockIdx.x]; // polytope index
-	// int gbx = Qt + blockIdx.x * (blockDim.x / dMax); // polytope index
+	// int gbx = non_empty_num_indices[blockIdx.x]; // polytope index
+	int gbx = Qt + blockIdx.x * (blockDim.x / dMax); // polytope index
 	int deltaC, DeltaC, nbVer;
 	deltaC = magic_values[0]; // Values should be stored at the end Algo (4.4)
 	DeltaC = magic_values[1]; // The total size needed for each configuration s
 	nbVer  = magic_values[2]; // The maximum number of vertices in each sub-polytope
+
 
 	levL(Ver, C + gbx * DeltaC + deltaC + (m0 + 12) * dMax, levels + gbx * 2 * nbVer,
 		&num[gbx], WB + Qt * 4 * nbN, tidx, 0, dMax - 1, gbx, magic_values);

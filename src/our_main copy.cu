@@ -74,6 +74,7 @@ int main(void){
 		sizeCB += (deltaSize - k) * (1 + domains_CPU[0] - k);
 		sizeB  += (deltaSize - k);
 	}
+	
 	// maximum number of vertices by subpolytope: d0 combinations among m-d0
     int nb_vertices = 1000; // TODO 
 
